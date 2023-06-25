@@ -3,15 +3,16 @@
 #include <chrono>
 #include <thread>
 #include <random>
+#include <functional>
 #include <GLFW/glfw3.h>
+#include <cmath>
 
 float M_PI = 3.14f;
-int max_balls = 3;
-// Define ball class
+int max_balls = 15;
+int middleBalls = 0;
+
 class Ball {
 public:
-    int sector;
-    //Ball(float x, float y, float radius, float dx, float dy, float r, float g, float b) : x(x), y(y), radius(radius), dx(dx), dy(dy), r(r), g(g), b(b), bounces(0) {}
     Ball(float x, float y, float radius, float dx, float dy, float r, float g, float b, int sector)
         : x(x), y(y), radius(radius), dx(dx), dy(dy), r(r), g(g), b(b), bounces(0), sector(sector) {}
 
@@ -25,7 +26,10 @@ public:
         glEnd();
     }
 
-    void move() {
+    void move(Ball* ball) {
+        if (shouldRemove()) {
+            return;
+        }
         x += dx;
         y += dy;
 
@@ -33,6 +37,17 @@ public:
         if (newSector != sector) {
             sector = newSector;
             adjustSpeed();
+
+            //if (newSector == 1) {
+            //    while (middleBalls >= 2) {
+            //        std::this_thread::sleep_for(std::chrono::seconds(1));
+            //    }
+            //    middleBalls++;
+            //}
+            //else
+            //{
+            //    middleBalls--;
+            //}
         }
 
         if (x < -1 + radius || x > 1 - radius) {
@@ -45,16 +60,13 @@ public:
         }
     }
 
-
     int calculateSector() {
-        // Calculate the sector number based on the ball's x location
         float sectorWidth = 1.0f / 3.0f;
         float normalizedX = (x + 1) / 2.0f;
         return static_cast<int>(normalizedX / sectorWidth);
     }
 
     void adjustSpeed() {
-        // Adjust the speed based on the sector number
         switch (sector) {
         case 0:
             dx *= 0.8f;
@@ -78,10 +90,15 @@ public:
     }
 
     float x, y, radius, dx, dy, r, g, b;
-    int bounces;
+    int bounces, sector;
 };
 
-// Define function to spawn new balls
+int calculateSector(int x) {
+    float sectorWidth = 1.0f / 3.0f;
+    float normalizedX = (x + 1) / 2.0f;
+    return static_cast<int>(normalizedX / sectorWidth);
+}
+
 void spawnBalls(std::vector<Ball>& balls, int& ballCount) {
     std::random_device rd;
     std::mt19937 gen(rd());
@@ -91,7 +108,6 @@ void spawnBalls(std::vector<Ball>& balls, int& ballCount) {
 
     while (true) {
         if (ballCount < max_balls) {
-            // Spawn new ball
             float x = posDist(gen);
             float y = posDist(gen);
             float dx = dirDist(gen);
@@ -99,15 +115,12 @@ void spawnBalls(std::vector<Ball>& balls, int& ballCount) {
             float r = colorDist(gen);
             float g = colorDist(gen);
             float b = colorDist(gen);
-            balls.emplace_back(x, y, 0.05f, dx, dy, r, g, b, (ballCount % 3));
-            
+            balls.emplace_back(x, y, 0.05f, dx, dy, r, g, b, calculateSector(x));
             ballCount++;
         }
 
-        // Delay for 1 second
         std::this_thread::sleep_for(std::chrono::seconds(1));
 
-        // Check if any ball should be removed
         auto it = balls.begin();
         while (it != balls.end()) {
             auto& ball = *it;
@@ -123,13 +136,11 @@ void spawnBalls(std::vector<Ball>& balls, int& ballCount) {
 }
 
 int main() {
-    // Initialize GLFW
     if (!glfwInit()) {
         std::cerr << "Failed to initialize GLFW\n";
         return -1;
     }
 
-    // Create window
     GLFWwindow* window = glfwCreateWindow(640, 480, "Bouncing Balls", nullptr, nullptr);
     if (!window) {
         std::cerr << "Failed to create GLFW window\n";
@@ -137,53 +148,56 @@ int main() {
         return -1;
     }
 
-    // Make window current context
     glfwMakeContextCurrent(window);
-
-    // Enable vsync
     glfwSwapInterval(1);
 
-    // Initialize ball vector and count
     std::vector<Ball> balls;
     int ballCount = 0;
 
-    // Spawn balls in a separate thread
     std::thread ballThread(spawnBalls, std::ref(balls), std::ref(ballCount));
 
-    // Main loop
-    while (!glfwWindowShouldClose(window)) {
+    std::vector<std::thread> ballThreads;
+    for (auto& ball : balls) {
+        ballThreads.emplace_back(std::bind(&Ball::move, &ball, &ball));
+    }
 
+    while (!glfwWindowShouldClose(window)) {
         int width, height;
         glfwGetFramebufferSize(window, &width, &height);
         glViewport(0, 0, width, height);
-        // Clear screen
         glClear(GL_COLOR_BUFFER_BIT);
 
-        // Draw balls
-        for (auto it = balls.begin(); it != balls.end(); ) {
-            auto& ball = *it;
+        for (auto& ball : balls) {
             ball.draw();
-            ball.move();
-            if (ball.shouldRemove()) {
-                it = balls.erase(it);
-                ballCount--;
-            }
-            else {
-                ++it;
-            }
         }
 
-        // Swap buffers
-        glfwSwapBuffers(window);
+        // Draw sector lines
+        glColor3f(1.0f, 1.0f, 1.0f);
+        glLineWidth(2.0f);
+        glBegin(GL_LINES);
+        for (int i = 0; i < 3; i++) {
+            float sectorWidth = 2.0f / 3;
+            float sectorStartX = -1.0f + i * sectorWidth;
+            glVertex2f(sectorStartX, -1.0f);
+            glVertex2f(sectorStartX, 1.0f);
+        }
+        glEnd();
 
-        // Poll for events
+        glfwSwapBuffers(window);
         glfwPollEvents();
+
+        for (auto& thread : ballThreads) {
+            thread.join();
+        }
+
+        ballThreads.clear();
+        for (auto& ball : balls) {
+            ballThreads.emplace_back(std::bind(&Ball::move, &ball, &ball));
+        }
     }
 
-    // Wait for ball thread to finish
     ballThread.join();
 
-    // Terminate GLFW
     glfwTerminate();
 
     return 0;
